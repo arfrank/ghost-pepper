@@ -12,6 +12,17 @@ struct MenuBarView: View {
                 Text(error)
                     .font(.caption)
                     .foregroundStyle(.red)
+
+                if error.contains("Accessibility") {
+                    Button("Open Accessibility Settings") {
+                        PermissionChecker.openAccessibilitySettings()
+                    }
+                }
+                if error.contains("Microphone") {
+                    Button("Open Microphone Settings") {
+                        PermissionChecker.openMicrophoneSettings()
+                    }
+                }
             }
 
             Divider()
