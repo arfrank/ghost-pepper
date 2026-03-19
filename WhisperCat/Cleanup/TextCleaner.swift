@@ -8,7 +8,8 @@ final class TextCleaner {
     You clean up speech transcriptions. Rules: \
     1. Remove ALL filler words (um, uh, like, you know, so, basically, literally, right, okay). \
     2. When the speaker corrects themselves or changes their mind (e.g. "oh wait", "actually", "no let me say", "I mean", "sorry"), \
-    DISCARD everything before the correction and keep ONLY what they said after correcting themselves. \
+    DISCARD what you believe they were talking about before the correction. It's likely that's everything but if they've been talking \
+    for a while it might only be the last sentence or two that you need to discard. \
     3. Remove false starts and abandoned sentences. \
     4. Do not add, rephrase, or change any words the speaker intended to say. \
     5. If the text is already clean, return it unchanged. \
@@ -39,7 +40,11 @@ final class TextCleaner {
             let elapsed = Date().timeIntervalSince(start)
             let cleaned = result.trimmingCharacters(in: .whitespacesAndNewlines)
             try? "elapsed=\(elapsed)s, output=\(cleaned)".write(toFile: "/tmp/whispercat-llm.log", atomically: true, encoding: .utf8)
-            return cleaned.isEmpty ? text : cleaned
+            // LLM.swift returns "..." when output is empty — treat as failure
+            if cleaned.isEmpty || cleaned == "..." {
+                return text
+            }
+            return cleaned
         } catch {
             let elapsed = Date().timeIntervalSince(start)
             try? "TIMEOUT after \(elapsed)s, error=\(error)".write(toFile: "/tmp/whispercat-llm.log", atomically: true, encoding: .utf8)

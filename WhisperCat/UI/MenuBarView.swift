@@ -48,40 +48,30 @@ struct MenuBarView: View {
 
             Divider()
 
-            Picker("Cleanup", selection: $appState.cleanupEnabled) {
-                Text("Off").tag(false)
-                Text("On").tag(true)
-            }
-            .onChange(of: appState.cleanupEnabled) { _, enabled in
-                Task {
-                    if enabled {
-                        await appState.textCleanupManager.loadModel()
-                    } else {
-                        appState.textCleanupManager.unloadModel()
+            Toggle("Cleanup", isOn: $appState.cleanupEnabled)
+                .onChange(of: appState.cleanupEnabled) { _, enabled in
+                    Task {
+                        if enabled {
+                            await appState.textCleanupManager.loadModel()
+                        } else {
+                            appState.textCleanupManager.unloadModel()
+                        }
                     }
                 }
-            }
 
             if appState.cleanupEnabled {
-                switch appState.textCleanupManager.state {
-                case .loading:
+                if appState.textCleanupManager.state == .loading {
                     Text("Loading cleanup model...")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                case .error:
+                } else if appState.textCleanupManager.state == .error {
                     Text(appState.textCleanupManager.errorMessage ?? "Cleanup model error")
                         .font(.caption)
                         .foregroundStyle(.red)
-                case .ready, .idle:
-                    EmptyView()
                 }
 
                 Button("Edit Cleanup Prompt...") {
                     promptEditor.show(prompt: $appState.cleanupPrompt)
-                }
-
-                Button("Reset Prompt to Default") {
-                    appState.cleanupPrompt = TextCleaner.defaultPrompt
                 }
             }
 
