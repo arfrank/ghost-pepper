@@ -71,7 +71,7 @@ struct MenuBarView: View {
                 }
 
                 Button("Edit Cleanup Prompt...") {
-                    promptEditor.show(prompt: $appState.cleanupPrompt)
+                    promptEditor.show(appState: appState)
                 }
             }
 

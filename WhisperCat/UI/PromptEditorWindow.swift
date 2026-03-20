@@ -4,14 +4,11 @@ import AppKit
 class PromptEditorController {
     private var window: NSWindow?
 
-    func show(prompt: Binding<String>) {
-        if let window = window {
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            return
-        }
+    func show(appState: AppState) {
+        // Always recreate the window to get fresh bindings
+        dismiss()
 
-        let editor = PromptEditorView(prompt: prompt, onClose: { [weak self] in
+        let editor = PromptEditorView(appState: appState, onClose: { [weak self] in
             self?.dismiss()
         })
 
@@ -37,7 +34,7 @@ class PromptEditorController {
 }
 
 struct PromptEditorView: View {
-    @Binding var prompt: String
+    @ObservedObject var appState: AppState
     let onClose: () -> Void
 
     var body: some View {
@@ -49,13 +46,13 @@ struct PromptEditorView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            TextEditor(text: $prompt)
+            TextEditor(text: $appState.cleanupPrompt)
                 .font(.system(.body, design: .monospaced))
                 .frame(minHeight: 250)
 
             HStack {
                 Button("Reset to Default") {
-                    prompt = TextCleaner.defaultPrompt
+                    appState.cleanupPrompt = TextCleaner.defaultPrompt
                 }
 
                 Spacer()
