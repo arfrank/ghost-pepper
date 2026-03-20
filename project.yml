@@ -23,6 +23,7 @@ targets:
       base:
         INFOPLIST_FILE: GhostPepper/Info.plist
         CODE_SIGN_ENTITLEMENTS: GhostPepper/GhostPepper.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PRODUCT_BUNDLE_IDENTIFIER: com.github.matthartman.ghostpepper
         ENABLE_APP_SANDBOX: NO
         ENABLE_HARDENED_RUNTIME: NO

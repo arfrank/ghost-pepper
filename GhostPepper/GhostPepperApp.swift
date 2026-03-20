@@ -14,9 +14,14 @@ struct GhostPepperApp: App {
                     await appState.initialize()
                 }
         } label: {
-            Image(systemName: menuBarIconName)
-                .symbolRenderingMode(.palette)
-                .foregroundStyle(menuBarIconColor)
+            if appState.status == .ready || appState.status == .transcribing || appState.status == .cleaningUp {
+                Image("MenuBarIcon")
+                    .renderingMode(.template)
+            } else {
+                Image(systemName: menuBarIconName)
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(menuBarIconColor)
+            }
         }
     }
 

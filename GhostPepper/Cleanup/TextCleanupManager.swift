@@ -16,8 +16,8 @@ final class TextCleanupManager: ObservableObject {
 
     private(set) var llm: LLM?
 
-    private static let modelFileName = "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf"
-    private static let modelURL = "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf"
+    private static let modelFileName = "Qwen2.5-3B-Instruct-Q4_K_M.gguf"
+    private static let modelURL = "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf"
     private static let modelSizeMB = "~1 GB"
 
     var isReady: Bool { state == .ready }

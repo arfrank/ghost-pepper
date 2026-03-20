@@ -22,6 +22,7 @@
 		8DB88CCDDA460DB0BE4DA5D9 /* WhisperTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05CA10D89E26492346D31E43 /* WhisperTranscriber.swift */; };
 		90F411F8E3564F1C5DDD1A5F /* TextPasterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8760607B80C14BCBD5F9FC0 /* TextPasterTests.swift */; };
 		9965C422E2E6A1F48E717C28 /* LLM in Frameworks */ = {isa = PBXBuildFile; productRef = 985AD96FDE69D89C0B2DA245 /* LLM */; };
+		9BE17BC60B1F9CFD3747A844 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 43A2B55CB980E02EC1E16BF2 /* Assets.xcassets */; };
 		A3183D30BAD0A1C2712E033F /* PermissionChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC1BDC9C549491AC003117EC /* PermissionChecker.swift */; };
 		A9E5AB4DC4D58FB4C50A1B23 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A4D4E875210CD0DADAF5D7E /* AppState.swift */; };
 		BF329CF451CC34A3B74348CC /* HotkeyMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF88392E6B9F0168E43B8C51 /* HotkeyMonitor.swift */; };
@@ -50,6 +51,7 @@
 		37863EC2F34067ED0C5B2B6F /* TextCleaner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextCleaner.swift; sourceTree = "<group>"; };
 		37C0D4F04FFD2C13DEACA238 /* TextCleanupManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextCleanupManager.swift; sourceTree = "<group>"; };
 		3A4D4E875210CD0DADAF5D7E /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+		43A2B55CB980E02EC1E16BF2 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		4A1EB2D492BFBDC803133A31 /* TextPaster.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextPaster.swift; sourceTree = "<group>"; };
 		52BCF852883B9E469B61B56B /* GhostPepper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = GhostPepper.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		589AC554EEF132B519736D92 /* HotkeyMonitorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyMonitorTests.swift; sourceTree = "<group>"; };
@@ -85,6 +87,7 @@
 			isa = PBXGroup;
 			children = (
 				3A4D4E875210CD0DADAF5D7E /* AppState.swift */,
+				43A2B55CB980E02EC1E16BF2 /* Assets.xcassets */,
 				94DD151A4D6F1474F4F138FD /* GhostPepper.entitlements */,
 				DF9AE24266DDCCADE832CF33 /* GhostPepperApp.swift */,
 				2ADE6885C71A11CEC8B2A50E /* Info.plist */,
@@ -183,6 +186,7 @@
 			buildConfigurationList = 0B62CC6358D7DB2D8265F051 /* Build configuration list for PBXNativeTarget "GhostPepper" */;
 			buildPhases = (
 				24067D7D335818724D4D6FCF /* Sources */,
+				F218DCE315BF83F3FF5D0C15 /* Resources */,
 				AFF40C97B06ADBEECEB999B8 /* Frameworks */,
 			);
 			buildRules = (
@@ -254,6 +258,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		F218DCE315BF83F3FF5D0C15 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9BE17BC60B1F9CFD3747A844 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		24067D7D335818724D4D6FCF /* Sources */ = {
