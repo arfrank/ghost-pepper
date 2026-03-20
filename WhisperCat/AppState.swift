@@ -126,6 +126,31 @@ class AppState: ObservableObject {
             } else {
                 finalText = text
             }
+
+            // Append to log for debugging
+            let timestamp = ISO8601DateFormatter().string(from: Date())
+            let logEntry = """
+            [\(timestamp)]
+            --- RAW TRANSCRIPTION ---
+            \(text)
+            --- CLEANUP: enabled=\(cleanupEnabled), ready=\(textCleanupManager.isReady) ---
+            --- PROMPT ---
+            \(cleanupPrompt)
+            --- CLEANED OUTPUT ---
+            \(finalText)
+            --- END ---\n\n
+            """
+            let logDir = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".whispercat/logs")
+            let logFile = logDir.appendingPathComponent("transcript.log")
+            try? FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
+            if let handle = try? FileHandle(forWritingTo: logFile) {
+                handle.seekToEndOfFile()
+                handle.write(logEntry.data(using: .utf8)!)
+                handle.closeFile()
+            } else {
+                try? logEntry.write(to: logFile, atomically: true, encoding: .utf8)
+            }
+
             overlay.dismiss()
             textPaster.paste(text: finalText)
         } else {
