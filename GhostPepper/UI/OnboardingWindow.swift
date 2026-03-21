@@ -736,37 +736,39 @@ struct DoneStep: View {
 
 struct EmojiProgressBar: View {
     private let emojis = ["🌶️", "👻", "🔥"]
-    private let maxSlots = 12
+    private let maxSlots = 15
     @State private var filledCount = 0
     @State private var timer: Timer?
 
     var body: some View {
-        HStack(spacing: 1) {
-            ForEach(0..<maxSlots, id: \.self) { i in
-                if i < filledCount {
-                    Text(emojis[i % emojis.count])
-                        .font(.system(size: 16))
-                } else {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(Color(nsColor: .separatorColor))
-                        .frame(height: 6)
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                // Background track
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color(nsColor: .separatorColor).opacity(0.3))
+
+                // Filled portion with emojis
+                HStack(spacing: 0) {
+                    ForEach(0..<filledCount, id: \.self) { i in
+                        Text(emojis[i % emojis.count])
+                            .font(.system(size: 13))
+                            .frame(width: geo.size.width / CGFloat(maxSlots), height: geo.size.height)
+                    }
                 }
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 4)
-        .padding(.horizontal, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color(nsColor: .controlBackgroundColor))
-        )
+        .frame(height: 22)
+        .clipShape(RoundedRectangle(cornerRadius: 4))
         .onAppear {
-            timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
+            timer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { _ in
                 DispatchQueue.main.async {
-                    if filledCount >= maxSlots {
-                        filledCount = 0
-                    } else {
-                        filledCount += 1
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        if filledCount >= maxSlots {
+                            filledCount = 0
+                        } else {
+                            filledCount += 1
+                        }
                     }
                 }
             }
