@@ -82,7 +82,7 @@ class OnboardingWindowController {
             window.title = "Ghost Pepper"
             window.contentView = NSHostingView(rootView: onboardingView)
             window.center()
-            window.level = .floating
+            window.level = .normal
             window.isReleasedWhenClosed = false
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -91,11 +91,14 @@ class OnboardingWindowController {
         }
     }
 
+    func bringToFront() {
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     func dismiss() {
         window?.close()
         window = nil
-        // Hide from dock/Cmd+Tab again
-        NSApp.setActivationPolicy(.accessory)
     }
 }
 
