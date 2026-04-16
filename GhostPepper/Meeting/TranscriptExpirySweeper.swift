@@ -79,11 +79,15 @@ enum TranscriptExpirySweeper {
 
     private static func sweepFolder(_ folder: URL, onlyFlagged: Bool, now: Date, into result: inout Result) {
         let fm = FileManager.default
-        guard let files = try? fm.contentsOfDirectory(
-            at: folder,
-            includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
-        ) else {
+        let files: [URL]
+        do {
+            files = try fm.contentsOfDirectory(
+                at: folder,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
+            )
+        } catch {
+            result.errors.append("Transcript expiry: failed to scan \(folder.lastPathComponent): \(error.localizedDescription)")
             return
         }
 

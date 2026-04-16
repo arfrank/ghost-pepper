@@ -261,8 +261,14 @@ final class MeetingWindowState: ObservableObject {
 
     func saveActiveTab() {
         guard let tab = activeTab, let url = tab.fileURL else { return }
-        let markdown = MeetingMarkdownWriter.renderMarkdown(transcript: tab.transcript)
-        try? markdown.write(to: url, atomically: true, encoding: .utf8)
+        // Route through MeetingMarkdownWriter.write so the sweep/open-tab guard
+        // applies: if the file was swept while this tab was open, the in-memory
+        // segments won't clobber the on-disk expiry marker.
+        _ = try? MeetingMarkdownWriter.write(
+            transcript: tab.transcript,
+            to: url.deletingLastPathComponent(),
+            existingFileURL: url
+        )
     }
 }
 

@@ -398,6 +398,25 @@ final class TranscriptExpirySweeperTests: XCTestCase {
                       "A missing base directory is normal first-launch state and must not log an error")
     }
 
+    func testUnreadableDateFolderRecordsError() throws {
+        // A real date-named folder that we chmod 000 — the sweeper passes the
+        // isDirectory check but trips on contentsOfDirectory. Must record, not swallow.
+        let folder = baseDirectory.appendingPathComponent("2026-01-01")
+        try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
+        try fileManager.setAttributes([.posixPermissions: 0o000], ofItemAtPath: folder.path)
+        defer {
+            // Restore so tearDown can remove the tree.
+            try? fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+        }
+        let result = TranscriptExpirySweeper.run(
+            baseDirectory: baseDirectory,
+            daysToKeep: 30,
+            now: localDate("2026-04-16")
+        )
+        XCTAssertFalse(result.errors.isEmpty,
+                       "Per-folder scan failures must surface as errors, not be silently swallowed")
+    }
+
     func testUnreadableBaseDirectoryRecordsError() throws {
         // If the base directory exists but is actually a file (or is unreadable),
         // the sweep must record an error instead of silently failing.

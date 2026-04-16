@@ -426,6 +426,20 @@ struct SettingsView: View {
         return formattedStageDuration(duration)
     }
 
+    /// Description copy for the Privacy card. When retention is "Never", nothing is
+    /// actually deleted — surface that honestly instead of letting the scope-toggle
+    /// copy reference a value that has no effect.
+    private var privacyCardDescription: String {
+        let notSecureErasure = "Note: this is not secure erasure — APFS copy-on-write and Time Machine snapshots can leave previously written bytes in free space or backups until overwritten."
+        if appState.transcriptExpirationDays == 0 {
+            return "No transcripts are auto-deleted. Set a retention window above to enable auto-deletion."
+        }
+        if appState.transcriptAutoDeleteAllMeetings {
+            return "Every meeting's transcript is removed after the chosen window. Notes and summary are kept. " + notSecureErasure
+        }
+        return "Only meetings you flag via the \"auto-delete\" checkbox on the meeting window are removed after the chosen window. Notes and summary are kept. " + notSecureErasure
+    }
+
     @ViewBuilder
     private var detailContent: some View {
         VStack(alignment: .leading, spacing: 28) {
@@ -1606,9 +1620,7 @@ struct SettingsView: View {
                             }
                         }
 
-                        Text(appState.transcriptAutoDeleteAllMeetings
-                            ? "Every meeting's transcript is removed after the chosen window. Notes and summary are kept. Note: this is not secure erasure — APFS copy-on-write and Time Machine snapshots can leave previously written bytes in free space or backups until overwritten."
-                            : "Only meetings you flag via the \"auto-delete\" checkbox on the meeting window are removed after the chosen window. Notes and summary are kept. Note: this is not secure erasure — APFS copy-on-write and Time Machine snapshots can leave previously written bytes in free space or backups until overwritten.")
+                        Text(privacyCardDescription)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
