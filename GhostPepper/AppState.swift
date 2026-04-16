@@ -68,6 +68,11 @@ class AppState: ObservableObject {
     @AppStorage("preferredLanguage") var preferredLanguage: String = "auto"
     @AppStorage("pepperChatHost") var pepperChatHost: String = "https://api.zo.computer"
     @AppStorage("pepperChatApiKey") var pepperChatApiKey: String = ""
+    @AppStorage("pepperChatEnabled") var pepperChatEnabled: Bool = false {
+        didSet {
+            hotkeyMonitor.updateBindings(shortcutBindings)
+        }
+    }
     @AppStorage("pepperChatIncludeScreenContext") var pepperChatIncludeScreenContext: Bool = true
     @AppStorage("trelloApiKey") var trelloApiKey: String = ""
     @AppStorage("trelloToken") var trelloToken: String = ""
@@ -75,7 +80,14 @@ class AppState: ObservableObject {
     @Published var trelloBoards: [TrelloBoard] = []
     @AppStorage("meetingTranscriptEnabled") var meetingTranscriptEnabled: Bool = false
     @AppStorage("meetingAutoDetectEnabled") var meetingAutoDetectEnabled: Bool = true
+    @AppStorage("meetingWindowFloatsWhileRecording") var meetingWindowFloatsWhileRecording: Bool = true
     @AppStorage("meetingSummaryPrompt") var meetingSummaryPrompt: String = MeetingSummaryGenerator.defaultPrompt
+    /// Retention window in days for meeting transcripts. 0 = keep forever.
+    /// Summaries and notes are always kept; only the `## Transcript` section is stripped.
+    @AppStorage("transcriptExpirationDays") var transcriptExpirationDays: Int = 0
+    /// When false (default), only meetings the user has flagged are swept. When true,
+    /// every meeting older than the retention window is swept. Stored per-machine.
+    @AppStorage("transcriptAutoDeleteAllMeetings") var transcriptAutoDeleteAllMeetings: Bool = false
     @AppStorage("pauseMediaWhileRecording") var pauseMediaWhileRecording: Bool = true
     @Published private(set) var pushToTalkChord: KeyChord
     @Published private(set) var toggleToTalkChord: KeyChord
@@ -147,12 +159,14 @@ class AppState: ObservableObject {
     private let inputMonitoringChecker: () -> Bool
     private let inputMonitoringPrompter: () -> Void
     private var hotkeyMonitorStarted = false
+    private var transcriptExpirySweepTimer: Timer?
 
     private static let cleanupBackendDefaultsKey = "cleanupBackend"
     private static let frontmostWindowContextEnabledDefaultsKey = "frontmostWindowContextEnabled"
     private static let postPasteLearningEnabledDefaultsKey = "postPasteLearningEnabled"
     private static let ignoreOtherSpeakersDefaultsKey = "ignoreOtherSpeakers"
     private static let playSoundsDefaultsKey = "playSounds"
+    private static let pepperChatEnabledDefaultsKey = "pepperChatEnabled"
     private static let emptyTranscriptionCancelThresholdSampleCount = 8_000 // ~0.5 seconds — show "no sound" hint for almost all failed recordings
     private static let speechModelErrorPrefix = "Failed to load speech model: "
 
@@ -244,6 +258,9 @@ class AppState: ObservableObject {
             self.playSounds = true
         } else {
             self.playSounds = cleanupSettingsDefaults.bool(forKey: Self.playSoundsDefaultsKey)
+        }
+        if UserDefaults.standard.object(forKey: Self.pepperChatEnabledDefaultsKey) == nil {
+            pepperChatEnabled = !(UserDefaults.standard.string(forKey: "pepperChatApiKey") ?? "").isEmpty
         }
         self.transcriber = SpeechTranscriber(modelManager: modelManager)
         self.textCleaner = TextCleaner(
@@ -449,6 +466,43 @@ class AppState: ObservableObject {
 
         // Start meeting detection if enabled
         setupMeetingDetector()
+
+        // Sweep expired transcripts once on launch, then every 6 hours thereafter.
+        runTranscriptExpirySweep()
+        startTranscriptExpirySweepTimer()
+    }
+
+    /// Scans the meetings directory and strips transcripts whose folder date
+    /// is older than `transcriptExpirationDays`. Safe to call repeatedly.
+    func runTranscriptExpirySweep() {
+        let days = transcriptExpirationDays
+        guard days > 0 else { return }
+        let baseDirectory = MeetingTranscriptSettings.effectiveSaveDirectory()
+        let onlyFlagged = !transcriptAutoDeleteAllMeetings
+        // Filesystem I/O off the main actor; hop back to log on main.
+        Task { [weak self] in
+            let result = await Task.detached(priority: .utility) {
+                TranscriptExpirySweeper.run(baseDirectory: baseDirectory, daysToKeep: days, onlyFlagged: onlyFlagged)
+            }.value
+            guard let self, result.expiredCount > 0 || !result.errors.isEmpty else { return }
+            if result.expiredCount > 0 {
+                self.debugLogStore.record(
+                    category: .model,
+                    message: "Transcript expiry: deleted \(result.expiredCount) transcript(s) older than \(days) day(s)."
+                )
+            }
+            for error in result.errors {
+                self.debugLogStore.record(category: .model, message: error)
+            }
+        }
+    }
+
+    private func startTranscriptExpirySweepTimer() {
+        transcriptExpirySweepTimer?.invalidate()
+        // Every 6 hours: catches long-running sessions without busy-polling.
+        transcriptExpirySweepTimer = Timer.scheduledTimer(withTimeInterval: 6 * 60 * 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.runTranscriptExpirySweep() }
+        }
     }
 
     func relaunchApp() {
@@ -827,20 +881,25 @@ class AppState: ObservableObject {
     private let pepperChatWindowController = PepperChatWindowController()
     private lazy var meetingTranscriptWindowController: MeetingTranscriptWindowController = {
         let controller = MeetingTranscriptWindowController()
+        controller.shouldFloatWhileRecording = { [weak self] in
+            self?.meetingWindowFloatsWhileRecording ?? true
+        }
         controller.onOpenSettings = { [weak self] in
             self?.showSettings()
         }
-        controller.onStartRecording = { [weak self] name -> MeetingSession? in
-            self?.createMeetingSession(name: name)
+        controller.onStartRecording = { [weak self] name, detectedMeeting -> MeetingSession? in
+            self?.createMeetingSession(name: name, detectedMeeting: detectedMeeting)
         }
         controller.onStopRecording = { [weak self] session in
             Task {
-                await session.stop()
-                self?.debugLogStore.record(category: .model, message: "Meeting stopped: \(session.transcript.meetingName)")
+                await self?.finishMeetingSession(session, logPrefix: "Meeting stopped")
             }
         }
         controller.onGenerateSummary = { [weak self] transcript in
             Task { await self?.generateMeetingSummary(for: transcript) }
+        }
+        controller.onRequestTranscriptSweep = { [weak self] in
+            self?.runTranscriptExpirySweep()
         }
         return controller
     }()
@@ -882,6 +941,7 @@ class AppState: ObservableObject {
     }
 
     func showPepperChat() {
+        guard pepperChatEnabled else { return }
         pepperChatWindowController.show(session: pepperChatSession)
     }
 
@@ -900,7 +960,7 @@ class AppState: ObservableObject {
     }
 
     func beginPepperChatRecording() {
-        guard !pepperChatApiKey.isEmpty else { return }
+        guard pepperChatEnabled, !pepperChatApiKey.isEmpty else { return }
         // Clear previous state so new recording takes over
         pepperChatSession.isReviewingContext = false
         pepperChatSession.capturedCommand = nil
@@ -983,6 +1043,7 @@ class AppState: ObservableObject {
             contextCaptureMonitor = nil
         }
         lastCapturedWindowTitle = nil
+        hotkeyMonitor.updateBindings(shortcutBindings)
         soundEffects.playStop()
         debugLogStore.record(category: .hotkey, message: "Pepper Chat recording stopped.")
 
@@ -1007,7 +1068,7 @@ class AppState: ObservableObject {
 
     /// Creates a new MeetingSession, starts recording, and returns it.
     /// Called by the window state when the user clicks "+" or auto-detection triggers.
-    func createMeetingSession(name: String) -> MeetingSession? {
+    func createMeetingSession(name: String, detectedMeeting: DetectedMeeting? = nil) -> MeetingSession? {
         guard PermissionChecker.hasScreenRecordingPermission() else {
             PermissionChecker.requestScreenRecordingPermission()
             return nil
@@ -1016,9 +1077,15 @@ class AppState: ObservableObject {
         let saveDir = MeetingTranscriptSettings.effectiveSaveDirectory()
         let session = MeetingSession(
             meetingName: name,
+            detectedMeeting: detectedMeeting,
             transcriber: transcriber,
             saveDirectory: saveDir
         )
+        session.onAutoStopRequested = { [weak self] session in
+            Task {
+                await self?.finishMeetingSession(session, logPrefix: "Meeting transcription auto-stopped")
+            }
+        }
         activeMeetingSession = session
 
         Task {
@@ -1034,9 +1101,19 @@ class AppState: ObservableObject {
         return session
     }
 
-    func startMeetingTranscription(meetingName: String, skipConsent: Bool = false, sourceURL: String? = nil) {
+    func startMeetingTranscription(
+        meetingName: String,
+        skipConsent: Bool = false,
+        sourceURL: String? = nil,
+        detectedMeeting: DetectedMeeting? = nil
+    ) {
         meetingTranscriptWindowController.show()
-        meetingTranscriptWindowController.requestRecording(name: meetingName, skipConsent: skipConsent, sourceURL: sourceURL)
+        meetingTranscriptWindowController.requestRecording(
+            name: meetingName,
+            skipConsent: skipConsent,
+            sourceURL: sourceURL,
+            detectedMeeting: detectedMeeting
+        )
     }
 
     func showMeetingTranscriptWindow() {
@@ -1045,6 +1122,10 @@ class AppState: ObservableObject {
 
     func showOrCreateMeetingWindow() {
         meetingTranscriptWindowController.show()
+    }
+
+    func refreshMeetingTranscriptWindowPresentation() {
+        meetingTranscriptWindowController.refreshPresentation()
     }
 
     func fetchTrelloBoards() async {
@@ -1075,9 +1156,7 @@ class AppState: ObservableObject {
     func stopMeetingTranscription() {
         guard let session = activeMeetingSession else { return }
         Task {
-            await session.stop()
-            debugLogStore.record(category: .model, message: "Meeting transcription stopped: \(session.transcript.meetingName)")
-            activeMeetingSession = nil
+            await finishMeetingSession(session, logPrefix: "Meeting transcription stopped")
         }
     }
 
@@ -1093,7 +1172,8 @@ class AppState: ObservableObject {
                 self?.startMeetingTranscription(
                     meetingName: meeting.suggestedName,
                     skipConsent: meeting.isVideo,
-                    sourceURL: meeting.sourceURL
+                    sourceURL: meeting.sourceURL,
+                    detectedMeeting: meeting
                 )
             }
             self.pepperChatWindowController.show(session: self.pepperChatSession)
@@ -1102,12 +1182,25 @@ class AppState: ObservableObject {
         meetingDetector.start()
     }
 
+    private func finishMeetingSession(_ session: MeetingSession, logPrefix: String) async {
+        await session.stop()
+        if activeMeetingSession === session {
+            activeMeetingSession = nil
+        }
+        debugLogStore.record(category: .model, message: "\(logPrefix): \(session.transcript.meetingName)")
+    }
+
     private var shortcutBindings: [ChordAction: KeyChord] {
-        [
+        var bindings: [ChordAction: KeyChord] = [
             .pushToTalk: pushToTalkChord,
-            .toggleToTalk: toggleToTalkChord,
-            .pepperChat: pepperChatChord
+            .toggleToTalk: toggleToTalkChord
         ]
+
+        if pepperChatEnabled || pepperChatRecorder != nil {
+            bindings[.pepperChat] = pepperChatChord
+        }
+
+        return bindings
     }
 
     private func persistShortcutBindingsIfNeeded() {

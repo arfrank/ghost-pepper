@@ -2,15 +2,26 @@ import AppKit
 import Combine
 import SwiftUI
 
+enum MeetingTranscriptWindowPresentation {
+    static func windowLevel(
+        shouldFloatWhileRecording: Bool,
+        hasActiveRecording: Bool
+    ) -> NSWindow.Level {
+        shouldFloatWhileRecording && hasActiveRecording ? .floating : .normal
+    }
+}
+
 // MARK: - Window Controller
 
 @MainActor
 final class MeetingTranscriptWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     var onOpenSettings: (() -> Void)?
-    var onStartRecording: ((_ name: String) -> MeetingSession?)?
+    var onStartRecording: ((_ name: String, _ detectedMeeting: DetectedMeeting?) -> MeetingSession?)?
     var onStopRecording: ((MeetingSession) -> Void)?
     var onGenerateSummary: ((MeetingTranscript) -> Void)?
+    var onRequestTranscriptSweep: (() -> Void)?
+    var shouldFloatWhileRecording: () -> Bool = { false }
 
     private(set) var windowState: MeetingWindowState?
 
@@ -20,6 +31,7 @@ final class MeetingTranscriptWindowController: NSObject, NSWindowDelegate {
             if let session = session, let state = windowState {
                 state.addRecordingTab(session: session)
             }
+            updateWindowLevel()
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
@@ -30,6 +42,10 @@ final class MeetingTranscriptWindowController: NSObject, NSWindowDelegate {
         state.onStartRecording = onStartRecording
         state.onStopRecording = onStopRecording
         state.onGenerateSummary = onGenerateSummary
+        state.onRequestTranscriptSweep = onRequestTranscriptSweep
+        state.onRecordingStateChanged = { [weak self] in
+            self?.updateWindowLevel()
+        }
         windowState = state
 
         if let session = session {
@@ -55,7 +71,6 @@ final class MeetingTranscriptWindowController: NSObject, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 500, height: 400)
         window.contentViewController = NSHostingController(rootView: view)
-        window.level = .normal
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.hidesOnDeactivate = false
         NSApp.setActivationPolicy(.regular)
@@ -63,28 +78,32 @@ final class MeetingTranscriptWindowController: NSObject, NSWindowDelegate {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         self.window = window
+        updateWindowLevel()
     }
 
     func close() {
         guard let window = window else { return }
         window.orderOut(nil)
         self.window = nil
+        windowState?.onRecordingStateChanged = nil
         windowState = nil
         NSApp.setActivationPolicy(.accessory)
     }
 
     /// Request a recording — shows consent dialog first (or starts immediately if user opted out).
-    func requestRecording(name: String, skipConsent: Bool = false, sourceURL: String? = nil) {
+    func requestRecording(name: String, skipConsent: Bool = false, sourceURL: String? = nil, detectedMeeting: DetectedMeeting? = nil) {
         guard let state = windowState else { return }
         state.pendingSourceURL = sourceURL
+        state.pendingDetectedMeeting = detectedMeeting
         if skipConsent || UserDefaults.standard.bool(forKey: "skipConsentDialog") {
-            guard let session = state.onStartRecording?(name) else { return }
+            guard let session = state.onStartRecording?(name, detectedMeeting) else { return }
             state.addRecordingTab(session: session)
             // Add URL to notes if provided
             if let url = sourceURL {
                 session.transcript.notes = "Source: \(url)\n\n"
             }
             state.pendingSourceURL = nil
+            state.pendingDetectedMeeting = nil
         } else {
             state.pendingRecordingName = name
             state.showConsentDialog = true
@@ -95,6 +114,18 @@ final class MeetingTranscriptWindowController: NSObject, NSWindowDelegate {
         sender.orderOut(nil)
         NSApp.setActivationPolicy(.accessory)
         return false
+    }
+
+    func refreshPresentation() {
+        updateWindowLevel()
+    }
+
+    private func updateWindowLevel() {
+        guard let window, let windowState else { return }
+        window.level = MeetingTranscriptWindowPresentation.windowLevel(
+            shouldFloatWhileRecording: shouldFloatWhileRecording(),
+            hasActiveRecording: windowState.hasActiveRecording
+        )
     }
 }
 
@@ -108,17 +139,25 @@ final class OpenMeetingTab: ObservableObject, Identifiable {
     @Published var isRecording = false
     var session: MeetingSession? // nil = loaded from disk
     private var sessionObserver: Any?
+    private let onRecordingStateChanged: (() -> Void)?
 
     private var fileURLObserver: Any?
 
-    init(transcript: MeetingTranscript, fileURL: URL? = nil, session: MeetingSession? = nil) {
+    init(
+        transcript: MeetingTranscript,
+        fileURL: URL? = nil,
+        session: MeetingSession? = nil,
+        onRecordingStateChanged: (() -> Void)? = nil
+    ) {
         self.transcript = transcript
         self.fileURL = fileURL
         self.session = session
+        self.onRecordingStateChanged = onRecordingStateChanged
         if let session = session {
             isRecording = session.isActive
             sessionObserver = session.$isActive.sink { [weak self] active in
                 self?.isRecording = active
+                self?.onRecordingStateChanged?()
             }
             // Sync fileURL from session when it gets created
             fileURLObserver = session.$fileURL.sink { [weak self] url in
@@ -142,20 +181,35 @@ final class MeetingWindowState: ObservableObject {
     @Published var showConsentDialog = false
     var pendingRecordingName: String?
     var pendingSourceURL: String?
+    var pendingDetectedMeeting: DetectedMeeting?
+    var onRecordingStateChanged: (() -> Void)?
 
     var onOpenSettings: (() -> Void)?
-    var onStartRecording: ((_ name: String) -> MeetingSession?)?
+    var onStartRecording: ((_ name: String, _ detectedMeeting: DetectedMeeting?) -> MeetingSession?)?
     var onStopRecording: ((MeetingSession) -> Void)?
     var onGenerateSummary: ((MeetingTranscript) -> Void)?
+    var onRequestTranscriptSweep: (() -> Void)?
 
     var activeTab: OpenMeetingTab? {
         tabs.first { $0.id == activeTabID }
     }
 
+    var hasActiveRecording: Bool {
+        tabs.contains { $0.isRecording }
+    }
+
     func addRecordingTab(session: MeetingSession) {
-        let tab = OpenMeetingTab(transcript: session.transcript, fileURL: session.fileURL, session: session)
+        let tab = OpenMeetingTab(
+            transcript: session.transcript,
+            fileURL: session.fileURL,
+            session: session,
+            onRecordingStateChanged: { [weak self] in
+                self?.onRecordingStateChanged?()
+            }
+        )
         tabs.append(tab)
         activeTabID = tab.id
+        onRecordingStateChanged?()
     }
 
     func openFile(_ url: URL) {
@@ -171,6 +225,7 @@ final class MeetingWindowState: ObservableObject {
             let tab = OpenMeetingTab(transcript: transcript, fileURL: url)
             tabs.append(tab)
             activeTabID = tab.id
+            onRecordingStateChanged?()
         } catch {
             print("MeetingWindowState: failed to load \(url.lastPathComponent): \(error)")
         }
@@ -183,6 +238,7 @@ final class MeetingWindowState: ObservableObject {
         }
 
         tabs.removeAll { $0.id == tabID }
+        onRecordingStateChanged?()
 
         // Switch to adjacent tab
         if activeTabID == tabID {
@@ -197,7 +253,7 @@ final class MeetingWindowState: ObservableObject {
         let name = "Quick Note — \(formatter.string(from: Date()))"
 
         if UserDefaults.standard.bool(forKey: "skipConsentDialog") {
-            guard let session = onStartRecording?(name) else { return }
+            guard let session = onStartRecording?(name, nil) else { return }
             addRecordingTab(session: session)
         } else {
             pendingRecordingName = name
@@ -209,9 +265,11 @@ final class MeetingWindowState: ObservableObject {
         showConsentDialog = false
         guard let name = pendingRecordingName else { return }
         let url = pendingSourceURL
+        let detectedMeeting = pendingDetectedMeeting
         pendingRecordingName = nil
         pendingSourceURL = nil
-        guard let session = onStartRecording?(name) else { return }
+        pendingDetectedMeeting = nil
+        guard let session = onStartRecording?(name, detectedMeeting) else { return }
         if let url = url {
             session.transcript.notes = "Source: \(url)\n\n"
         }
@@ -222,6 +280,7 @@ final class MeetingWindowState: ObservableObject {
         showConsentDialog = false
         pendingRecordingName = nil
         pendingSourceURL = nil
+        pendingDetectedMeeting = nil
     }
 
     func loadHistory() {
@@ -258,8 +317,14 @@ final class MeetingWindowState: ObservableObject {
 
     func saveActiveTab() {
         guard let tab = activeTab, let url = tab.fileURL else { return }
-        let markdown = MeetingMarkdownWriter.renderMarkdown(transcript: tab.transcript)
-        try? markdown.write(to: url, atomically: true, encoding: .utf8)
+        // Route through MeetingMarkdownWriter.write so the sweep/open-tab guard
+        // applies: if the file was swept while this tab was open, the in-memory
+        // segments won't clobber the on-disk expiry marker.
+        _ = try? MeetingMarkdownWriter.write(
+            transcript: tab.transcript,
+            to: url.deletingLastPathComponent(),
+            existingFileURL: url
+        )
     }
 }
 
@@ -279,9 +344,6 @@ struct MeetingRootView: View {
             }
 
             VStack(spacing: 0) {
-                // Toolbar
-                MeetingToolbarView(state: state)
-
                 // File tabs (always show — includes "+" tab)
                 fileTabBar
 
@@ -310,41 +372,57 @@ struct MeetingRootView: View {
         }
     }
 
-    // (Toolbar is MeetingToolbarView below)
-
     // MARK: - File Tab Bar
 
     private var fileTabBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 0) {
-                ForEach(state.tabs) { tab in
-                    FileTabView(tab: tab, isActive: state.activeTabID == tab.id && !state.showNewTabView) {
-                        state.saveActiveTab()
-                        state.showNewTabView = false
-                        state.activeTabID = tab.id
-                    } onClose: {
-                        state.closeTab(tab.id)
-                    }
-                }
+        HStack(spacing: 0) {
+            Button(action: { state.showSidebar.toggle() }) {
+                Image(systemName: "sidebar.left")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(state.showSidebar ? .orange : .secondary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+            }
+            .buttonStyle(.plain)
+            .help(state.showSidebar ? "Hide sidebar" : "Show sidebar")
 
-                // "+" tab
-                Button(action: { state.showNewTabView = true }) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(state.showNewTabView ? .orange : .secondary)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .background(state.showNewTabView ? Color(nsColor: .textBackgroundColor) : Color.clear)
-                        .overlay(alignment: .bottom) {
-                            if state.showNewTabView {
-                                Rectangle().fill(Color.orange).frame(height: 2)
-                            }
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor).opacity(0.7))
+                .frame(width: 1, height: 18)
+                .padding(.trailing, 4)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 0) {
+                    ForEach(state.tabs) { tab in
+                        FileTabView(tab: tab, isActive: state.activeTabID == tab.id && !state.showNewTabView) {
+                            state.saveActiveTab()
+                            state.showNewTabView = false
+                            state.activeTabID = tab.id
+                        } onClose: {
+                            state.closeTab(tab.id)
                         }
+                    }
+
+                    // "+" tab
+                    Button(action: { state.showNewTabView = true }) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(state.showNewTabView ? .orange : .secondary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
+                            .background(state.showNewTabView ? Color(nsColor: .textBackgroundColor) : Color.clear)
+                            .overlay(alignment: .bottom) {
+                                if state.showNewTabView {
+                                    Rectangle().fill(Color.orange).frame(height: 2)
+                                }
+                            }
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
         }
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+        .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .bottom) {
             Rectangle().fill(Color(nsColor: .separatorColor)).frame(height: 1)
         }
@@ -427,31 +505,6 @@ private struct FileTabView: View {
     }
 }
 
-// MARK: - Toolbar (observes active tab directly)
-
-struct MeetingToolbarView: View {
-    @ObservedObject var state: MeetingWindowState
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Button(action: { state.showSidebar.toggle() }) {
-                Image(systemName: "sidebar.left")
-                    .font(.system(size: 14))
-                    .foregroundColor(.secondary)
-            }
-            .buttonStyle(.plain)
-
-            Spacer()
-
-            if let tab = state.activeTab {
-                ActiveTabRecordingIndicator(tab: tab)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-    }
-}
-
 /// Separate view that observes a single tab so isRecording changes trigger re-render.
 private struct ActiveTabRecordingIndicator: View {
     @ObservedObject var tab: OpenMeetingTab
@@ -496,27 +549,41 @@ struct MeetingTabContentView: View {
     @State private var searchText = ""
     @State private var showSearch = false
     @FocusState private var searchFocused: Bool
+    @AppStorage("transcriptExpirationDays") private var transcriptExpirationDays: Int = 0
+    @AppStorage("transcriptAutoDeleteAllMeetings") private var transcriptAutoDeleteAllMeetings: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Title + date
             VStack(alignment: .leading, spacing: 4) {
-                TextField("Untitled", text: $tab.transcript.meetingName)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 28, weight: .bold))
-                    .foregroundColor(.primary)
-                    .onSubmit { state.renameActiveTab() }
+                HStack(alignment: .top, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        TextField("Untitled", text: $tab.transcript.meetingName)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 28, weight: .bold))
+                            .foregroundColor(.primary)
+                            .onSubmit { state.renameActiveTab() }
 
-                Text(dateSubtitle)
-                    .font(.callout)
-                    .foregroundColor(.secondary)
-                    .padding(.bottom, 20)
+                        Text(dateSubtitle)
+                            .font(.callout)
+                            .foregroundColor(.secondary)
+                            .padding(.bottom, tab.transcript.attendees.isEmpty ? 20 : 8)
 
-                if !tab.transcript.attendees.isEmpty {
-                    Text("**Attendees:** \(tab.transcript.attendees.joined(separator: ", "))")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding(.bottom, 8)
+                        if !tab.transcript.attendees.isEmpty {
+                            Text("**Attendees:** \(tab.transcript.attendees.joined(separator: ", "))")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .padding(.bottom, 8)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    ActiveTabRecordingIndicator(tab: tab)
+                        .padding(.top, 4)
+                }
+
+                if transcriptExpirationDays > 0 && !transcriptAutoDeleteAllMeetings {
+                    autoDeleteToggle
                 }
             }
             .padding(.horizontal, 48)
@@ -693,7 +760,9 @@ struct MeetingTabContentView: View {
 
     private var transcriptContent: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if tab.transcript.segments.isEmpty {
+            if let expiredDate = tab.transcript.transcriptExpiredDate {
+                transcriptExpiredBanner(expiredDate: expiredDate)
+            } else if tab.transcript.segments.isEmpty {
                 if tab.isRecording {
                     HStack(spacing: 8) {
                         ProgressView().scaleEffect(0.6)
@@ -717,6 +786,57 @@ struct MeetingTabContentView: View {
                 }.padding(.top, 4)
             }
         }
+    }
+
+    private var autoDeleteToggle: some View {
+        let days = transcriptExpirationDays
+        let label = days == 1 ? "1 day" : "\(days) days"
+        return Toggle(isOn: Binding(
+            get: { tab.transcript.autoDeleteFlagged },
+            set: { newValue in
+                tab.transcript.autoDeleteFlagged = newValue
+                state.saveActiveTab()
+                // Fire a sweep immediately so users see the effect without waiting for
+                // the 6h timer or a settings toggle.
+                if newValue {
+                    state.onRequestTranscriptSweep?()
+                }
+            }
+        )) {
+            HStack(spacing: 6) {
+                Image(systemName: "clock.badge.xmark")
+                    .foregroundColor(.secondary)
+                    .font(.caption)
+                Text("Auto-delete transcript after \(label)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .toggleStyle(.checkbox)
+        .padding(.bottom, 8)
+    }
+
+    private func transcriptExpiredBanner(expiredDate: Date) -> some View {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        let dateString = formatter.string(from: expiredDate)
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "clock.badge.xmark")
+                .foregroundColor(.secondary)
+                .font(.system(size: 18))
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Transcript auto-deleted")
+                    .font(.callout.weight(.medium))
+                Text("Removed on \(dateString) per your privacy settings. The summary and notes above are preserved.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.08)))
+        .padding(.vertical, 4)
     }
 
     private var summaryContent: some View {
